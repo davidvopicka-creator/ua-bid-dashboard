@@ -668,59 +668,55 @@ async function loadFromBQ() {
   statusEl.textContent = '⏳ Signing in with Google…';
   try {
     const token = await getToken();
-    statusEl.textContent = '⏳ Running BigQuery query…';
+    statusEl.textContent = '⏳ Querying BigQuery…';
 
-    // Step 1: Create query job
-    const jobRes = await fetch(
-      `https://bigquery.googleapis.com/bigquery/v2/projects/${BQ_PROJECT}/jobs`,
+    // Synchronous query API — returns results directly for fast queries
+    const res = await fetch(
+      `https://bigquery.googleapis.com/bigquery/v2/projects/${BQ_PROJECT}/queries`,
       {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          configuration: { query: { query: `SELECT * FROM \`${BQ_TABLE}\``, useLegacySql: false } }
+          query:        `SELECT * FROM \`${BQ_TABLE}\``,
+          useLegacySql: false,
+          timeoutMs:    30000,
+          maxResults:   50000,
+          location:     'EU'
         })
       }
     );
-    if (!jobRes.ok) throw new Error(`BQ job failed: ${jobRes.status}`);
-    const job      = await jobRes.json();
-    const jobId    = job.jobReference.jobId;
-    const location = job.jobReference.location || 'EU';  // capture region
-
-    // Step 2: Poll until done
-    let done = false, tries = 0;
-    while (!done && tries < 60) {
-      await new Promise(r => setTimeout(r, 2000));
-      const pollUrl = new URL(`https://bigquery.googleapis.com/bigquery/v2/projects/${BQ_PROJECT}/jobs/${jobId}`);
-      pollUrl.searchParams.set('location', location);
-      const poll = await fetch(pollUrl.toString(), { headers: { Authorization: `Bearer ${token}` } });
-      if (!poll.ok) throw new Error(`Job poll failed (${poll.status}) — try again`);
-      const p = await poll.json();
-      if (!p.status) throw new Error(`Unexpected job response: ${JSON.stringify(p).slice(0,100)}`);
-      if (p.status.state === 'DONE') {
-        if (p.status.errorResult) throw new Error(p.status.errorResult.message);
-        done = true;
-      }
-      tries++;
+    if (!res.ok) {
+      const e = await res.json();
+      throw new Error(e.error?.message || `BQ error ${res.status}`);
     }
-    if (!done) throw new Error('Query timed out after 2 minutes');
+    const result = await res.json();
 
-    // Step 3: Fetch results (paginated)
-    statusEl.textContent = '⏳ Loading results…';
-    let allRows = [], schema = null, pageToken = null;
-    do {
-      const url = new URL(`https://bigquery.googleapis.com/bigquery/v2/projects/${BQ_PROJECT}/jobs/${jobId}/queryResults`);
-      url.searchParams.set('maxResults', '10000');
-      url.searchParams.set('location', location);
-      if (pageToken) url.searchParams.set('pageToken', pageToken);
-      const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
-      const d = await r.json();
-      if (!schema) schema = d.schema;
-      if (d.rows) allRows = allRows.concat(d.rows);
-      pageToken = d.pageToken;
-    } while (pageToken);
+    if (!result.jobComplete) {
+      throw new Error('Query took too long — try again in a moment');
+    }
 
-    // Step 4: Convert BQ format → rawRows
-    rawRows = bqToRows(schema, allRows);
+    if (!result.schema || !result.rows) {
+      throw new Error('No data returned — has the scheduled query run yet?');
+    }
+
+    rawRows = bqToRows(result.schema, result.rows);
+
+    // Handle pagination if table has more rows than maxResults
+    let pageToken = result.pageToken;
+    const jobId   = result.jobReference?.jobId;
+    const loc     = result.jobReference?.location || 'EU';
+    while (pageToken && jobId) {
+      statusEl.textContent = `⏳ Loading more rows… (${rawRows.length.toLocaleString()} so far)`;
+      const pageUrl = new URL(`https://bigquery.googleapis.com/bigquery/v2/projects/${BQ_PROJECT}/jobs/${jobId}/queryResults`);
+      pageUrl.searchParams.set('pageToken', pageToken);
+      pageUrl.searchParams.set('maxResults', '50000');
+      pageUrl.searchParams.set('location', loc);
+      const pr = await fetch(pageUrl.toString(), { headers: { Authorization: `Bearer ${token}` } });
+      const pd = await pr.json();
+      if (pd.rows) rawRows = rawRows.concat(bqToRows(result.schema, pd.rows));
+      pageToken = pd.pageToken;
+    }
+
     statusEl.style.color = 'var(--green)';
     statusEl.textContent = `✓ Loaded ${rawRows.length.toLocaleString()} rows from BigQuery`;
     showDashboard();
@@ -730,6 +726,7 @@ async function loadFromBQ() {
     console.error(err);
   }
 }
+
 
 function bqToRows(schema, rows) {
   const fields = schema.fields.map(f => f.name);
