@@ -5,7 +5,12 @@
 <link rel="icon" href="data:,">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Norton Mobile UA — Campaign Health Dashboard</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js">
+function showHelp() { document.getElementById('helpOverlay').style.display = 'flex'; }
+function hideHelp() { document.getElementById('helpOverlay').style.display = 'none'; }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideHelp(); });
+
+</script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 :root {
@@ -223,6 +228,30 @@ tr.rejected-row td{background:#fef2f2 !important;opacity:.7}
 .camp-filter-btn:hover{color:var(--blue);border-bottom-color:var(--blue)}
 .wk-active-filter{display:inline-flex;align-items:center;gap:5px;background:var(--blue-bg);color:var(--blue-dark);padding:3px 8px;border-radius:999px;font-size:12px;font-weight:600}
 .wk-active-filter button{background:none;border:none;cursor:pointer;color:var(--blue-dark);font-size:13px;line-height:1;padding:0 0 0 2px}
+
+/* HELP MODAL */
+.help-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:flex-start;justify-content:flex-end;padding:60px 24px 24px}
+.help-panel{background:var(--card);border-radius:12px;width:520px;max-height:calc(100vh - 84px);overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.2);display:flex;flex-direction:column}
+.help-header{padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--card);z-index:1}
+.help-header h2{font-size:16px;font-weight:700;margin:0}
+.help-close{background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);line-height:1;padding:4px}
+.help-close:hover{color:var(--text)}
+.help-body{padding:20px 24px;flex:1}
+.help-section{margin-bottom:24px}
+.help-section:last-child{margin-bottom:0}
+.help-section h3{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:0 0 10px}
+.help-section p,.help-section li{font-size:13px;line-height:1.6;color:var(--text);margin:0 0 6px}
+.help-section ul{padding-left:18px;margin:6px 0}
+.help-badge{display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:700;margin-right:4px;vertical-align:middle}
+.hb-green{background:#d1fae5;color:#065f46}
+.hb-blue{background:#dbeafe;color:#1e40af}
+.hb-orange{background:#fef3c7;color:#92400e}
+.hb-purple{background:#ede9fe;color:#5b21b6}
+.hb-red{background:#fee2e2;color:#991b1b}
+.hb-yellow{background:#fef9c3;color:#854d0e}
+.hb-gray{background:#f3f4f6;color:#374151}
+.help-divider{border:none;border-top:1px solid var(--border);margin:20px 0}
+
 </style>
 </head>
 <body>
@@ -268,6 +297,7 @@ tr.rejected-row td{background:#fef2f2 !important;opacity:.7}
       <option value="ios">iOS (Apple)</option>
     </select>
     <button class="btn btn-green" id="exportBtn" onclick="exportShareable()" style="display:none">⬇ Export Shareable</button>
+    <button class="btn" onclick="showHelp()" style="background:#6b7280;min-width:32px;padding:6px 10px" title="Help & documentation">?</button>
   </div>
 </div>
 
@@ -1932,5 +1962,101 @@ function sortWeekly(col) {
   renderWeeklyTable();
 }
 </script>
+
+<!-- HELP MODAL -->
+<div id="helpOverlay" class="help-overlay" style="display:none" onclick="if(event.target===this)hideHelp()">
+  <div class="help-panel">
+    <div class="help-header">
+      <h2>📖 Dashboard Guide</h2>
+      <button class="help-close" onclick="hideHelp()">✕</button>
+    </div>
+    <div class="help-body">
+
+      <div class="help-section">
+        <h3>Data source</h3>
+        <p>Performance data comes from <strong>Singular</strong> (attribution platform) via BigQuery, updated daily at 23:30 UTC. Campaigns shown are <strong>N360 + NSV, Android + iOS</strong>, from fiscal year start (April 4, 2026).</p>
+      </div>
+
+      <hr class="help-divider">
+
+      <div class="help-section">
+        <h3>View Types</h3>
+        <p>The toggle in the header switches how revenue is attributed to each week:</p>
+        <ul>
+          <li><strong>In-Period</strong> — revenue that actually fired this week, from any user cohort. Answers: <em>"What hit the books this week?"</em></li>
+          <li><strong>D8 Cohorted ★</strong> — revenue from users <em>acquired</em> this week, within 8 days of install. Primary bid signal. Captures ~91% of D30 revenue, matures 3–4 weeks sooner than D30.</li>
+          <li><strong>D30 Cohorted</strong> — revenue from users acquired this week, within 30 days. More complete but less timely.</li>
+          <li><strong>Cumulative</strong> — all revenue ever from users acquired this week. Always growing; all cohorts are open.</li>
+        </ul>
+        <p>Weeks with the <span class="help-badge hb-yellow">~</span> badge are still accumulating conversions and may increase.</p>
+      </div>
+
+      <hr class="help-divider">
+
+      <div class="help-section">
+        <h3>D8 Scalar & Target ROAS</h3>
+        <p>D8 captures <strong>90.9% of D30 revenue</strong> (empirically derived from purchase timing analysis across our cohorts). To make D8 ROAS comparable to our 30% D30 target, the dashboard applies a scalar:</p>
+        <ul>
+          <li><strong>D8 target = 30% × 0.91 = 27.3%</strong></li>
+          <li>A campaign with D8 ROAS of 27.3% is performing at par with the 30% D30 goal</li>
+        </ul>
+        <p>The <strong>Target ROAS</strong> input (default 30%) controls this floor. All buckets and pills scale automatically when you adjust it.</p>
+      </div>
+
+      <hr class="help-divider">
+
+      <div class="help-section">
+        <h3>Campaign Health Buckets</h3>
+        <p>Campaigns are classified based on D8 ROAS vs the target floor and WoW trend:</p>
+        <ul>
+          <li><span class="help-badge hb-green">🏆 Top Performers</span> Spend ≥ $20k, ROAS ≥ target. Stable high-volume campaigns.</li>
+          <li><span class="help-badge hb-blue">📈 Top Growers</span> ROAS improving >5pp WoW and currently above target. Sorted by last-week spend.</li>
+          <li><span class="help-badge hb-orange">📉 Biggest Droppers</span> Largest WoW ROAS decline. Most are still above target — watch, don't panic.</li>
+          <li><span class="help-badge hb-purple">💎 Hidden Potential</span> ROAS ≥ 2× target but spend &lt; $20k. Efficient but underscaled — bid increase candidates.</li>
+          <li><span class="help-badge hb-red">🚨 Below Target</span> ROAS below the floor. Immediate attention needed.</li>
+        </ul>
+        <p>Campaigns below the <strong>Min Spend</strong> threshold (default $3k/week) are excluded from buckets — too little data to act on.</p>
+        <p>Click any campaign name to jump to the Weekly Breakdown tab pre-filtered to that campaign.</p>
+      </div>
+
+      <hr class="help-divider">
+
+      <div class="help-section">
+        <h3>Bid Recommendations</h3>
+        <p>The <strong>🎯 Bid Recommendations</strong> tab reads from a JSON file generated by the Python pipeline. Logic:</p>
+        <ul>
+          <li><strong>tROAS campaigns</strong>: D8 ROAS vs our internal 30% floor (not Google's campaign target). Above floor → lower Google tROAS to unlock volume. Below floor → raise to tighten.</li>
+          <li><strong>tCPA campaigns</strong>: same D8 ROAS signal. Above floor → raise tCPA to bid more aggressively. Below → lower tCPA.</li>
+          <li>All changes capped at <strong>±20%</strong> per Google's learning-phase rule.</li>
+          <li>For tROAS, the suggested bid never goes below our 30% floor.</li>
+        </ul>
+        <p>The <strong>~Spend Δ/wk</strong> column shows a ballpark spend impact — calibrated against Google's own projections in June 2026. Larger markets (budget ≥ $10k/day) respond super-linearly (~3.5×); smaller geos are more linear (~1.5–2×).</p>
+      </div>
+
+      <hr class="help-divider">
+
+      <div class="help-section">
+        <h3>Fiscal Weeks</h3>
+        <p>Fiscal year starts <strong>Saturday April 4, 2026</strong>. Each fiscal week runs Saturday–Friday. The data uses Monday-anchored calendar weeks internally — the fiscal week label (FW1, FW2…) shown in the dashboard is the fiscal week containing that Monday.</p>
+        <p>The current (incomplete) week is always excluded from analysis.</p>
+      </div>
+
+      <hr class="help-divider">
+
+      <div class="help-section">
+        <h3>Known limitations</h3>
+        <ul>
+          <li>D8 scalar (0.91) is a fixed empirical estimate — may drift over time as product changes trial lengths.</li>
+          <li>Spend impact estimates are ballpark only — market saturation, competition, and budget headroom all affect real response.</li>
+          <li>tCPA targets in Google Ads optimise for a different event (installs/trials) than our revenue metric. ROAS-based proxy is an approximation.</li>
+          <li>Health bucket thresholds are fixed percentages — see <code>config.py</code> to adjust.</li>
+        </ul>
+        <p style="color:var(--muted);font-size:12px;margin-top:12px">Full decision log: <em>mvp_decisions_and_todos.md</em> in the project folder.</p>
+      </div>
+
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
