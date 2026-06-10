@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Norton Mobile UA — Campaign Health Dashboard</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 :root {
   --bg: #f0f2f5;
@@ -520,12 +521,61 @@ tr.rejected-row td{background:#fef2f2 !important;opacity:.7}
 // Otherwise (GCS static hosting), fetch directly from GCS.
 const ON_CLOUD_RUN   = window.location.hostname.endsWith('.run.app');
 const CLOUD_RUN_BASE = 'https://ua-bid-dashboard-7ybiacbnrq-ew.a.run.app';
-const GCS_PERFORMANCE_CSV  = ON_CLOUD_RUN
+
+// ── OAuth + GCS via Bearer token (works from any non-Google domain) ──────────
+const OAUTH_CLIENT_ID     = '1005836796205-srti51fti7ba0gutu123b264q3kq0lvf.apps.googleusercontent.com';
+const GCS_SCOPE           = 'https://www.googleapis.com/auth/devstorage.read_only';
+const GCS_BUCKET          = 'ua-bid-dashboard-norton';
+const GCS_API             = `https://storage.googleapis.com/download/storage/v1/b/${GCS_BUCKET}/o`;
+const GCS_PERFORMANCE_CSV = ON_CLOUD_RUN
   ? `${CLOUD_RUN_BASE}/api/performance`
-  : 'https://storage.cloud.google.com/ua-bid-dashboard-norton/data/roas_weekly_000000000000.csv';
+  : `${GCS_API}/data%2Froas_weekly_000000000000.csv?alt=media`;
 const GCS_RECOMMENDATIONS = ON_CLOUD_RUN
   ? `${CLOUD_RUN_BASE}/api/recommendations`
-  : 'https://storage.cloud.google.com/ua-bid-dashboard-norton/pipeline/recommendations.json';
+  : `${GCS_API}/pipeline%2Frecommendations.json?alt=media`;
+
+let tokenClient = null;
+let accessToken = null;
+let tokenExpiry = 0;
+
+function initGIS() {
+  if (typeof google === 'undefined' || !google.accounts) return;
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: OAUTH_CLIENT_ID,
+    scope:     GCS_SCOPE,
+    callback:  () => {}
+  });
+}
+
+function getToken() {
+  return new Promise((resolve, reject) => {
+    if (accessToken && Date.now() < tokenExpiry - 60000) { resolve(accessToken); return; }
+    if (!tokenClient) {
+      // GIS not loaded yet — try to init
+      initGIS();
+      if (!tokenClient) { reject(new Error('Google Sign-In not ready — wait a moment and try again.')); return; }
+    }
+    tokenClient.callback = (resp) => {
+      if (resp.error) { reject(new Error(resp.error_description || resp.error)); return; }
+      accessToken = resp.access_token;
+      tokenExpiry = Date.now() + resp.expires_in * 1000;
+      resolve(accessToken);
+    };
+    tokenClient.requestAccessToken({ prompt: '' });
+  });
+}
+
+async function fetchGCS(url) {
+  if (ON_CLOUD_RUN) {
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res;
+  }
+  const token = await getToken();
+  const res   = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`HTTP ${res.status} — check bucket permissions`);
+  return res;
+}
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────────────
 function TARGET_ROAS() { return (parseFloat(document.getElementById('roasTarget')?.value) || 30) / 100; }
@@ -561,6 +611,7 @@ const EMBEDDED_DATA = null; // __EMBEDDED_DATA_PLACEHOLDER__
 
 // ─── INIT ────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
+  initGIS();
   setupRecsDrop();
   if (EMBEDDED_DATA) {
     rawRows = EMBEDDED_DATA.rows;
@@ -588,10 +639,11 @@ function setupDrop() {
 
 async function loadFromGCS() {
   const statusEl = document.getElementById('gcsStatus');
-  statusEl.textContent = '⏳ Fetching latest data from GCS…';
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = '⏳ Signing in with Google…';
   try {
-    const res = await fetch(GCS_PERFORMANCE_CSV, { credentials: 'include' });
-    if (!res.ok) throw new Error(`HTTP ${res.status} — are you signed into your @gendigital.com account?`);
+    const res  = await fetchGCS(GCS_PERFORMANCE_CSV);
+    statusEl.textContent = '⏳ Fetching latest data…';
     const text = await res.text();
     rawRows = parseCSV(text);
     statusEl.textContent = `✓ Loaded ${rawRows.length.toLocaleString()} rows from GCS`;
