@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<link rel="icon" href="data:,">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Norton Mobile UA — Campaign Health Dashboard</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
@@ -680,7 +681,7 @@ async function loadFromBQ() {
           query:        `SELECT * FROM \`${BQ_TABLE}\``,
           useLegacySql: false,
           timeoutMs:    30000,
-          maxResults:   50000,
+          maxResults:   100000,
           location:     'EU'
         })
       }
@@ -700,22 +701,7 @@ async function loadFromBQ() {
     }
 
     rawRows = bqToRows(result.schema, result.rows);
-
-    // Handle pagination if table has more rows than maxResults
-    let pageToken = result.pageToken;
-    const jobId   = result.jobReference?.jobId;
-    const loc     = result.jobReference?.location || 'EU';
-    while (pageToken && jobId) {
-      statusEl.textContent = `⏳ Loading more rows… (${rawRows.length.toLocaleString()} so far)`;
-      const pageUrl = new URL(`https://bigquery.googleapis.com/bigquery/v2/projects/${BQ_PROJECT}/jobs/${jobId}/queryResults`);
-      pageUrl.searchParams.set('pageToken', pageToken);
-      pageUrl.searchParams.set('maxResults', '50000');
-      pageUrl.searchParams.set('location', loc);
-      const pr = await fetch(pageUrl.toString(), { headers: { Authorization: `Bearer ${token}` } });
-      const pd = await pr.json();
-      if (pd.rows) rawRows = rawRows.concat(bqToRows(result.schema, pd.rows));
-      pageToken = pd.pageToken;
-    }
+    // Note: maxResults:100000 covers our full dataset (~10k rows), no pagination needed
 
     statusEl.style.color = 'var(--green)';
     statusEl.textContent = `✓ Loaded ${rawRows.length.toLocaleString()} rows from BigQuery`;
