@@ -277,7 +277,7 @@ tr.rejected-row td{background:#fef2f2 !important;opacity:.7}
     <h2>UA Campaign Health Dashboard</h2>
     <p>Drop your BigQuery CSV export here, or click to browse.<br>Data stays local — nothing is uploaded.</p>
     <button class="file-label" onclick="loadFromGCS()" style="margin-bottom:10px;cursor:pointer;border:none">
-      ☁️ Load latest from GCS
+      ☁️ Load latest from BigQuery
     </button>
     <div id="gcsStatus" style="font-size:12px;color:var(--muted);min-height:16px;margin-bottom:8px"></div>
     <p style="font-size:12px;color:var(--muted);margin:8px 0">or</p>
@@ -524,12 +524,12 @@ const CLOUD_RUN_BASE = 'https://ua-bid-dashboard-7ybiacbnrq-ew.a.run.app';
 
 // ── OAuth + GCS via Bearer token (works from any non-Google domain) ──────────
 const OAUTH_CLIENT_ID     = '1005836796205-srti51fti7ba0gutu123b264q3kq0lvf.apps.googleusercontent.com';
-const GCS_SCOPE           = 'https://www.googleapis.com/auth/devstorage.read_only';
+const BQ_SCOPE            = 'https://www.googleapis.com/auth/bigquery.readonly';
+const BQ_PROJECT          = 'ppp-mobana-mob-acq-f';
+const BQ_TABLE            = 'ppp-mobana-mob-acq-f.ua_dashboard.performance_weekly';
+// GCS still used for recommendations.json (Python pipeline writes there)
 const GCS_BUCKET          = 'ua-bid-dashboard-norton';
 const GCS_API             = `https://storage.googleapis.com/download/storage/v1/b/${GCS_BUCKET}/o`;
-const GCS_PERFORMANCE_CSV = ON_CLOUD_RUN
-  ? `${CLOUD_RUN_BASE}/api/performance`
-  : `${GCS_API}/data%2Froas_weekly_000000000000.csv?alt=media`;
 const GCS_RECOMMENDATIONS = ON_CLOUD_RUN
   ? `${CLOUD_RUN_BASE}/api/recommendations`
   : `${GCS_API}/pipeline%2Frecommendations.json?alt=media`;
@@ -542,7 +542,7 @@ function initGIS() {
   if (typeof google === 'undefined' || !google.accounts) return;
   tokenClient = google.accounts.oauth2.initTokenClient({
     client_id: OAUTH_CLIENT_ID,
-    scope:     GCS_SCOPE,
+    scope:     BQ_SCOPE,
     callback:  () => {}
   });
 }
@@ -638,20 +638,109 @@ function setupDrop() {
 }
 
 async function loadFromGCS() {
+  // Routes to BQ query (non-GCS domain) or Cloud Run proxy (run.app)
+  if (ON_CLOUD_RUN) {
+    await loadFromCloudRun();
+  } else {
+    await loadFromBQ();
+  }
+}
+
+async function loadFromCloudRun() {
   const statusEl = document.getElementById('gcsStatus');
   statusEl.style.color = 'var(--muted)';
-  statusEl.textContent = '⏳ Signing in with Google…';
+  statusEl.textContent = '⏳ Fetching from Cloud Run…';
   try {
-    const res  = await fetchGCS(GCS_PERFORMANCE_CSV);
-    statusEl.textContent = '⏳ Fetching latest data…';
+    const res  = await fetchGCS(`${CLOUD_RUN_BASE}/api/performance`);
     const text = await res.text();
     rawRows = parseCSV(text);
-    statusEl.textContent = `✓ Loaded ${rawRows.length.toLocaleString()} rows from GCS`;
+    statusEl.textContent = `✓ Loaded ${rawRows.length.toLocaleString()} rows`;
     showDashboard();
   } catch (err) {
     statusEl.style.color = 'var(--red)';
     statusEl.textContent = `✗ ${err.message}`;
   }
+}
+
+async function loadFromBQ() {
+  const statusEl = document.getElementById('gcsStatus');
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = '⏳ Signing in with Google…';
+  try {
+    const token = await getToken();
+    statusEl.textContent = '⏳ Running BigQuery query…';
+
+    // Step 1: Create query job
+    const jobRes = await fetch(
+      `https://bigquery.googleapis.com/bigquery/v2/projects/${BQ_PROJECT}/jobs`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          configuration: { query: { query: `SELECT * FROM \`${BQ_TABLE}\``, useLegacySql: false } }
+        })
+      }
+    );
+    if (!jobRes.ok) throw new Error(`BQ job failed: ${jobRes.status}`);
+    const job    = await jobRes.json();
+    const jobId  = job.jobReference.jobId;
+
+    // Step 2: Poll until done
+    let done = false, tries = 0;
+    while (!done && tries < 60) {
+      await new Promise(r => setTimeout(r, 1000));
+      const poll = await fetch(
+        `https://bigquery.googleapis.com/bigquery/v2/projects/${BQ_PROJECT}/jobs/${jobId}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const p = await poll.json();
+      if (p.status.state === 'DONE') {
+        if (p.status.errorResult) throw new Error(p.status.errorResult.message);
+        done = true;
+      }
+      tries++;
+    }
+    if (!done) throw new Error('Query timed out');
+
+    // Step 3: Fetch results (paginated)
+    statusEl.textContent = '⏳ Loading results…';
+    let allRows = [], schema = null, pageToken = null;
+    do {
+      const url = new URL(`https://bigquery.googleapis.com/bigquery/v2/projects/${BQ_PROJECT}/jobs/${jobId}/queryResults`);
+      url.searchParams.set('maxResults', '10000');
+      if (pageToken) url.searchParams.set('pageToken', pageToken);
+      const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
+      const d = await r.json();
+      if (!schema) schema = d.schema;
+      if (d.rows) allRows = allRows.concat(d.rows);
+      pageToken = d.pageToken;
+    } while (pageToken);
+
+    // Step 4: Convert BQ format → rawRows
+    rawRows = bqToRows(schema, allRows);
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = `✓ Loaded ${rawRows.length.toLocaleString()} rows from BigQuery`;
+    showDashboard();
+  } catch (err) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = `✗ ${err.message}`;
+    console.error(err);
+  }
+}
+
+function bqToRows(schema, rows) {
+  const fields = schema.fields.map(f => f.name);
+  return rows.map(row => {
+    const obj = {};
+    fields.forEach((name, i) => {
+      const val = row.f[i].v;
+      if (val === null || val === 'null') { obj[name] = null; return; }
+      if (val === 'true')  { obj[name] = true;  return; }
+      if (val === 'false') { obj[name] = false; return; }
+      obj[name] = isNaN(val) || val === '' ? val : +val;
+    });
+    return obj;
+  });
 }
 
 function loadFile(file) {
