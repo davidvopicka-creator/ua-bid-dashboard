@@ -6,10 +6,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Norton Mobile UA — Campaign Health Dashboard</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js">
-function showHelp() { document.getElementById('helpOverlay').style.display = 'flex'; }
-function hideHelp() { document.getElementById('helpOverlay').style.display = 'none'; }
-document.addEventListener('keydown', e => { if (e.key === 'Escape') hideHelp(); });
-
 </script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
@@ -297,6 +293,7 @@ tr.rejected-row td{background:#fef2f2 !important;opacity:.7}
       <option value="ios">iOS (Apple)</option>
     </select>
     <button class="btn btn-green" id="exportBtn" onclick="exportShareable()" style="display:none">⬇ Export Shareable</button>
+    <span id="versionChip" style="font-size:11px;font-weight:700;color:var(--muted);background:var(--bg);border:1px solid var(--border);border-radius:999px;padding:3px 9px;white-space:nowrap"></span>
     <button class="btn" onclick="showHelp()" style="background:#6b7280;min-width:32px;padding:6px 10px" title="Help & documentation">?</button>
   </div>
 </div>
@@ -550,6 +547,9 @@ tr.rejected-row td{background:#fef2f2 !important;opacity:.7}
 // ─── DATA ENDPOINTS ──────────────────────────────────────────────────────────
 // When served from Cloud Run (*.run.app), use the server-side API proxy.
 // Otherwise (GCS static hosting), fetch directly from GCS.
+// ─── VERSION — bump on every deployment ──────────────────────────────────────
+const APP_VERSION = 'v7.1 · Jun 10';
+
 const ON_CLOUD_RUN   = window.location.hostname.endsWith('.run.app');
 const CLOUD_RUN_BASE = 'https://ua-bid-dashboard-7ybiacbnrq-ew.a.run.app';
 
@@ -808,6 +808,8 @@ function showDashboard() {
 
   setupRecsDrop();
   populateWeekSelects();
+  const vc = document.getElementById('versionChip');
+  if (vc) vc.textContent = APP_VERSION;
   render();
 }
 
@@ -1961,6 +1963,17 @@ function sortWeekly(col) {
   else { wkSortCol = col; wkSortDir = col === 'week_start' ? -1 : -1; }
   renderWeeklyTable();
 }
+
+// Set version chip
+document.addEventListener('DOMContentLoaded', () => {
+  const chip = document.getElementById('versionChip');
+  if (chip) chip.textContent = APP_VERSION;
+});
+
+// ─── HELP MODAL ───────────────────────────────────────────────────────────────
+function showHelp() { document.getElementById('helpOverlay').style.display = 'flex'; }
+function hideHelp() { document.getElementById('helpOverlay').style.display = 'none'; }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideHelp(); });
 </script>
 
 <!-- HELP MODAL -->
