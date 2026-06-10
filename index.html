@@ -682,25 +682,27 @@ async function loadFromBQ() {
       }
     );
     if (!jobRes.ok) throw new Error(`BQ job failed: ${jobRes.status}`);
-    const job    = await jobRes.json();
-    const jobId  = job.jobReference.jobId;
+    const job      = await jobRes.json();
+    const jobId    = job.jobReference.jobId;
+    const location = job.jobReference.location || 'EU';  // capture region
 
     // Step 2: Poll until done
     let done = false, tries = 0;
     while (!done && tries < 60) {
-      await new Promise(r => setTimeout(r, 1000));
-      const poll = await fetch(
-        `https://bigquery.googleapis.com/bigquery/v2/projects/${BQ_PROJECT}/jobs/${jobId}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      await new Promise(r => setTimeout(r, 2000));
+      const pollUrl = new URL(`https://bigquery.googleapis.com/bigquery/v2/projects/${BQ_PROJECT}/jobs/${jobId}`);
+      pollUrl.searchParams.set('location', location);
+      const poll = await fetch(pollUrl.toString(), { headers: { Authorization: `Bearer ${token}` } });
+      if (!poll.ok) throw new Error(`Job poll failed (${poll.status}) — try again`);
       const p = await poll.json();
+      if (!p.status) throw new Error(`Unexpected job response: ${JSON.stringify(p).slice(0,100)}`);
       if (p.status.state === 'DONE') {
         if (p.status.errorResult) throw new Error(p.status.errorResult.message);
         done = true;
       }
       tries++;
     }
-    if (!done) throw new Error('Query timed out');
+    if (!done) throw new Error('Query timed out after 2 minutes');
 
     // Step 3: Fetch results (paginated)
     statusEl.textContent = '⏳ Loading results…';
@@ -708,6 +710,7 @@ async function loadFromBQ() {
     do {
       const url = new URL(`https://bigquery.googleapis.com/bigquery/v2/projects/${BQ_PROJECT}/jobs/${jobId}/queryResults`);
       url.searchParams.set('maxResults', '10000');
+      url.searchParams.set('location', location);
       if (pageToken) url.searchParams.set('pageToken', pageToken);
       const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
       const d = await r.json();
