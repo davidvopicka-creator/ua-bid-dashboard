@@ -548,7 +548,7 @@ tr.rejected-row td{background:#fef2f2 !important;opacity:.7}
 // When served from Cloud Run (*.run.app), use the server-side API proxy.
 // Otherwise (GCS static hosting), fetch directly from GCS.
 // ─── VERSION — bump on every deployment ──────────────────────────────────────
-const APP_VERSION = 'v7.1 · Jun 10';
+const APP_VERSION = 'v7.2 · Jun 10';
 
 const ON_CLOUD_RUN   = window.location.hostname.endsWith('.run.app');
 const CLOUD_RUN_BASE = 'https://ua-bid-dashboard-7ybiacbnrq-ew.a.run.app';
@@ -578,11 +578,18 @@ function initGIS() {
   });
 }
 
+function loadCachedToken() {
+  const t = localStorage.getItem('bq_token');
+  const e = parseInt(localStorage.getItem('bq_token_expiry') || '0');
+  if (t && Date.now() < e - 60000) { accessToken = t; tokenExpiry = e; }
+}
+
 function getToken() {
   return new Promise((resolve, reject) => {
+    // Try localStorage cache first
+    loadCachedToken();
     if (accessToken && Date.now() < tokenExpiry - 60000) { resolve(accessToken); return; }
     if (!tokenClient) {
-      // GIS not loaded yet — try to init
       initGIS();
       if (!tokenClient) { reject(new Error('Google Sign-In not ready — wait a moment and try again.')); return; }
     }
@@ -590,6 +597,9 @@ function getToken() {
       if (resp.error) { reject(new Error(resp.error_description || resp.error)); return; }
       accessToken = resp.access_token;
       tokenExpiry = Date.now() + resp.expires_in * 1000;
+      // Cache in localStorage — survives page reloads (token expires in 1h anyway)
+      localStorage.setItem('bq_token', accessToken);
+      localStorage.setItem('bq_token_expiry', tokenExpiry.toString());
       resolve(accessToken);
     };
     tokenClient.requestAccessToken({ prompt: '' });
@@ -1314,6 +1324,37 @@ function renderTable() {
     if (col === sortCol) th.classList.add(sortDir === 1 ? 'sorted-asc' : 'sorted-desc');
   });
 
+  // ── Total row ─────────────────────────────────────────────────────────────
+  const _ET = effectiveTarget();
+  const totals = {
+    total_cost:          rows.reduce((s,c) => s + (c.total_cost||0), 0),
+    total_installs:      rows.reduce((s,c) => s + (c.total_installs||0), 0),
+    total_om_purchases:  rows.reduce((s,c) => s + (c.total_om_purchases||0), 0),
+    total_om_revenue:    rows.reduce((s,c) => s + (c.total_om_revenue||0), 0),
+  };
+  totals.cpi          = totals.total_installs ? totals.total_cost / totals.total_installs : null;
+  totals.om_ROAS      = totals.total_cost ? totals.total_om_revenue / totals.total_cost : null;
+  totals.om_CAC       = totals.total_om_purchases ? totals.total_cost / totals.total_om_purchases : null;
+  totals.om_ROAS_lw   = null; // not applicable for total
+  totals.spend_delta_pct = null;
+
+  const totRoasClass = totals.om_ROAS == null ? '' : totals.om_ROAS >= _ET ? 'pill-green' : totals.om_ROAS >= _ET*0.7 ? 'pill-yellow' : 'pill-red';
+  const totalRow = `<tr style="background:#f9fafb;font-weight:700;border-top:2px solid var(--border)">
+    <td class="td-name" style="font-weight:800">TOTAL (${rows.length} campaigns)</td>
+    <td></td>
+    <td>${fmtMoney(totals.total_cost)}</td>
+    <td>–</td>
+    <td>–</td>
+    <td>${fmtMoney(totals.total_cost)}</td>
+    <td>${totals.cpi != null ? '$'+totals.cpi.toFixed(2) : '–'}</td>
+    <td>${totals.total_om_purchases.toLocaleString()}</td>
+    <td>${fmtMoney(totals.total_om_revenue)}</td>
+    <td>${totals.om_ROAS != null ? `<span class="pill ${totRoasClass}">${fmtPct(totals.om_ROAS)}</span>` : '–'}</td>
+    <td>–</td>
+    <td>–</td>
+    <td>${totals.om_CAC != null ? '$'+totals.om_CAC.toFixed(0) : '–'}</td>
+  </tr>`;
+
   document.getElementById('tableBody').innerHTML = rows.map(c => {
     const _ET = effectiveTarget();
     const roasClass = c.om_ROAS == null ? '' : c.om_ROAS >= _ET ? 'pill-green' : c.om_ROAS >= _ET*0.7 ? 'pill-yellow' : 'pill-red';
@@ -1340,7 +1381,7 @@ function renderTable() {
       <td>${c.total_installs.toLocaleString()}</td>
       <td>${c.cpi != null ? '$'+c.cpi.toFixed(2) : '–'}</td>
     </tr>`;
-  }).join('');
+  }).join('') + totalRow;
 }
 
 function sortTable(col) {
